@@ -119,7 +119,6 @@ const getUserPosts = async (req, res, next) => {
 // =================== EDIT POST
 // PATCH : /api/posts/:id
 // PROTECTED
-// PROTECTED
 const editPost = async (req, res, next) => {
     try {
         let fileName;
@@ -135,6 +134,10 @@ const editPost = async (req, res, next) => {
 
         // Get old post from database to check creator / old thumbnail
         const oldPost = await Post.findById(postId);
+        if (!oldPost) {
+            return next(new HttpError("Post not found.", 404));
+        }
+
         if (req.user.id != oldPost.creator) {
             return next(new HttpError("Unauthorized", 403));
         }
@@ -143,12 +146,13 @@ const editPost = async (req, res, next) => {
             // Update without changing thumbnail
             updatedPost = await Post.findByIdAndUpdate(postId, { title, category, description }, { new: true });
         } else {
-            // 1. Delete old thumbnail from uploads folder
-            fs.unlink(path.join(__dirname, '..', 'uploads', oldPost.thumbnail), async (err) => {
-                if (err) {
-                    return next(new HttpError(err, 500));
+            // 1. Delete old thumbnail from uploads folder safely (check if file exists first)
+            if (oldPost.thumbnail) {
+                const oldThumbnailPath = path.join(__dirname, '..', 'uploads', oldPost.thumbnail);
+                if (fs.existsSync(oldThumbnailPath)) {
+                    fs.unlinkSync(oldThumbnailPath);
                 }
-            });
+            }
 
             // 2. Upload new thumbnail
             const { thumbnail } = req.files;
@@ -186,7 +190,6 @@ const editPost = async (req, res, next) => {
 // =================== DELETE POST
 // DELETE : /api/posts/:id
 // PROTECTED
-// PROTECTED
 const deletePost = async (req, res, next) => {
     try {
         const postId = req.params.id;
@@ -206,22 +209,23 @@ const deletePost = async (req, res, next) => {
 
         const fileName = post.thumbnail;
 
-        // Delete thumbnail from uploads folder
-        fs.unlink(path.join(__dirname, '..', 'uploads', fileName), async (err) => {
-            if (err) {
-                return next(new HttpError(err, 500));
-            } else {
-                // Delete post from database
-                await Post.findByIdAndUpdate(postId); // (သို့မဟုတ် findByIdAndDelete)
-                
-                // Find user and reduce post count by 1
-                const currentUser = await User.findById(req.user.id);
-                const userPostCount = currentUser?.posts - 1;
-                await User.findByIdAndUpdate(req.user.id, { posts: userPostCount });
-
-                res.status(200).json({ message: `Post ${postId} deleted successfully.` });
+        // Delete thumbnail from uploads folder safely (check if file exists first)
+        if (fileName) {
+            const filePath = path.join(__dirname, '..', 'uploads', fileName);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath); // synchronous ဖြင့် လုံခြုံစွာ ချက်ချင်းဖျက်ရန်
             }
-        });
+        }
+
+        // Delete post from database
+        await Post.findByIdAndDelete(postId);
+        
+        // Find user and reduce post count by 1
+        const currentUser = await User.findById(req.user.id);
+        const userPostCount = currentUser?.posts > 0 ? currentUser.posts - 1 : 0;
+        await User.findByIdAndUpdate(req.user.id, { posts: userPostCount });
+
+        res.status(200).json({ message: `Post ${postId} deleted successfully.` });
 
     } catch (error) {
         return next(new HttpError(error, 500));
